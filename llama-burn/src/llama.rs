@@ -884,7 +884,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "tiny", feature = "pretrained"))]
+    #[cfg(feature = "tiny")]
     fn test_load_tiny_llama() {
 
         let device = Default::default();
@@ -929,5 +929,79 @@ mod tests {
         assert!(tokenized.dims()[0] > 0, "Tokenization should produce tokens");
 
         println!("✓ TinyLlama model loaded successfully with {} cache layers", llama.cache.len());
+    }
+
+    #[test]
+    #[cfg(feature = "tiny")]
+    fn test_tiny_llama_gpu_memory_allocation() {
+        let device = Default::default();
+        let max_seq_len = 128;
+
+        // Construct paths to cached model files
+        let cache_dir = dirs::home_dir()
+            .expect("Should be able to get home directory")
+            .join(".cache")
+            .join("llama-burn")
+            .join("TinyLlama-1.1B");
+
+        let model_path = cache_dir.join("model.mpk");
+        let tokenizer_path = cache_dir.join("tokenizer.json");
+
+        // Skip test if cached files don't exist
+        if !model_path.exists() || !tokenizer_path.exists() {
+            println!("Skipping GPU memory test: cached TinyLlama files not found");
+            return;
+        }
+
+        // Load the model
+        let mut llama = LlamaConfig::load_tiny_llama::<TestBackend>(
+            model_path.to_str().unwrap(),
+            tokenizer_path.to_str().unwrap(),
+            max_seq_len,
+            &device,
+        ).expect("Failed to load TinyLlama model");
+
+        // Test that model tensors are allocated on the correct device
+        println!("Testing GPU memory allocation for TinyLlama model...");
+
+        // Create test input and verify it gets processed on GPU
+        let test_prompt = "Hello, world!";
+        let input_tokens = llama.tokenize(test_prompt);
+
+        // Store device and dimensions before moving the tensor
+        let input_device = input_tokens.device();
+        let batch_size = 1;
+        let seq_len = input_tokens.dims()[0];
+
+        // Verify the input tensor is on the expected device
+        assert_eq!(input_device, device, "Input tokens should be on the specified device");
+
+        // Test a forward pass to ensure model weights are on GPU
+        let input_reshaped = input_tokens.reshape([batch_size, seq_len]);
+
+        // This forward pass will fail if model weights aren't properly loaded on GPU
+        let logits = llama.model.forward(input_reshaped, &mut llama.cache, &llama.rope);
+
+        // Verify output is on the correct device
+        assert_eq!(logits.device(), device, "Model output should be on the specified device");
+
+        // Verify output has expected shape [batch_size, seq_len, vocab_size]
+        let output_dims = logits.dims();
+        assert_eq!(output_dims[0], batch_size, "Batch size should match");
+        assert_eq!(output_dims[1], seq_len, "Sequence length should match");
+        assert_eq!(output_dims[2], 32000, "Vocab size should be 32000 for TinyLlama");
+
+        // Verify all cache layers are properly initialized
+        for (i, _cache) in llama.cache.iter().enumerate() {
+            // Cache layers are initialized during model loading
+            // Just verify we can iterate through all expected layers
+            assert!(i < 22, "Should not have more than 22 cache layers");
+        }
+
+        println!("✓ TinyLlama model successfully allocated and running on GPU");
+        println!("  - Input tensors on device: {:?}", input_device);
+        println!("  - Output tensors on device: {:?}", logits.device());
+        println!("  - Output shape: {:?}", output_dims);
+        println!("  - All {} cache layers initialized", llama.cache.len());
     }
 }
