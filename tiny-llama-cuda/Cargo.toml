@@ -1,0 +1,25 @@
+[package]
+name = "tiny-llama-cuda"
+version = "0.1.0"
+edition = "2021"
+description = "Simplified TinyLlama implementation for CUDA with Burn framework"
+authors = ["AI Assistant"]
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# Burn dependencies from GitHub at specific commit
+burn = { git = "https://github.com/tracel-ai/burn.git", rev = "e80e6484b26d845c7faf3cba9375a99b249d653f", default-features = false, features = ["std", "cuda"] }
+burn-store = { git = "https://github.com/tracel-ai/burn.git", rev = "e80e6484b26d845c7faf3cba9375a99b249d653f" }
+
+# Tokenizer for TinyLlama (SentencePiece)
+tokenizers = { version = "0.19.1", default-features = false, features = ["onig"] }
+
+# Utilities
+itertools = { version = "0.12.1", default-features = false, features = ["use_alloc"] }
+serde = { version = "1.0.192", default-features = false, features = ["derive", "alloc"] }
+rand = { version = "0.8.5", default-features = false, features = ["alloc", "std_rng"] }
+dirs = "5.0.1"
+
+[dev-dependencies]
+clap = { version = "4.5.4", features = ["derive"] }
+

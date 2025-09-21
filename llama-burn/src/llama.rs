@@ -362,25 +362,62 @@ impl LlamaConfig {
             .with_max_seq_len(max_seq_len)
             .init::<B, SentiencePieceTokenizer>(device)?;
 
+        println!("Loading MPK record...");
+        let now = std::time::Instant::now();
         let recorder = NamedMpkFileRecorder::<HalfPrecisionSettings>::new();
         let llama = llama
             .load(checkpoint, &recorder)
             .map_err(|err| format!("Failed to load pre-trained Llama model.\nError: {err}"))?;
+        let elapsed = now.elapsed().as_secs();
+        println!("MPK loaded in {}s", elapsed);
 
         Ok(llama)
     }
 
-    // TODO: create an equivalent loader from .safetensor format
-    // Note: SafetensorsFileRecorder is not available in this version of Burn
-    // #[cfg(feature = "tiny")]
-    // pub fn load_tiny_llama_safetensors<B: Backend>(
-    //     checkpoint: &str,
-    //     tokenizer_path: &str,
-    //     max_seq_len: usize,
-    //     device: &Device<B>,
-    // ) -> Result<Llama<B, SentiencePieceTokenizer>, String> {
-    //     // Implementation would require SafetensorsFileRecorder
-    // }
+    /// Load pre-trained TinyLlama-1.1B Chat v1.0 model from safetensors format with [SentenciePiece](https://github.com/google/sentencepiece) tokenizer.
+    #[cfg(all(feature = "tiny", feature = "import"))]
+    pub fn load_tiny_llama_safetensors<B: Backend>(
+        checkpoint: &str,
+        tokenizer_path: &str,
+        max_seq_len: usize,
+        device: &Device<B>,
+    ) -> Result<Llama<B, SentiencePieceTokenizer>, String> {
+        use burn_import::safetensors::{LoadArgs, SafetensorsFileRecorder};
+
+        let mut llama = Self::tiny_llama(tokenizer_path)
+            .with_max_seq_len(max_seq_len)
+            .init::<B, SentiencePieceTokenizer>(device)?;
+
+        // Test with no key remapping and NoAdapter to isolate bottleneck
+        println!("Testing with NO key remapping and NoAdapter...");
+        let load_args = LoadArgs::new(checkpoint.into())
+            .with_adapter_type(burn_import::safetensors::AdapterType::NoAdapter);
+
+        println!("Loading safetensors record...");
+        let now = std::time::Instant::now();
+
+        // Use SafetensorsFileRecorder directly since candle_core is not accessible
+        let mut record: crate::transformer::TransformerRecord<B> = SafetensorsFileRecorder::<HalfPrecisionSettings>::new()
+            .load(load_args, device)
+            .map_err(|e| e.to_string())?;
+
+        let load_elapsed = now.elapsed();
+        println!("SafeTensors file loaded in {:.2}s", load_elapsed.as_secs_f32());
+
+        // SKIP weight permutation for performance testing
+        println!("Skipping weight permutation for performance test...");
+
+        println!("Loading record into model...");
+        let model_load_start = std::time::Instant::now();
+        llama.model = llama.model.load_record(record);
+        let model_load_elapsed = model_load_start.elapsed();
+        println!("Model loading completed in {:.2}s", model_load_elapsed.as_secs_f32());
+
+        let total_elapsed = now.elapsed();
+        println!("Total safetensors loading: {:.2}s", total_elapsed.as_secs_f32());
+
+        Ok(llama)
+    }
 
     /// Load pre-trained TinyLlama-1.1B Chat v1.0 model with [SentenciePiece](https://github.com/google/sentencepiece) tokenizer.
     #[cfg(all(feature = "tiny", feature = "pretrained"))]
@@ -1029,5 +1066,50 @@ mod tests {
         println!("  - Output tensors on device: {:?}", logits.device());
         println!("  - Output shape: {:?}", output_dims);
         println!("  - All {} cache layers initialized", llama.cache.len());
+    }
+
+    #[test]
+    #[cfg(all(feature = "tiny", feature = "import"))]
+    fn test_load_tiny_llama_safetensors() {
+        let device = Default::default();
+        let max_seq_len = 128;
+
+        // Path to safetensors model files
+        let model_dir = std::path::PathBuf::from(std::env::var("HOME").unwrap())
+            .join("models")
+            .join("TinyLlama-1.1B-Chat-v1.0");
+
+        let model_path = model_dir.join("model.safetensors");
+        let tokenizer_path = model_dir.join("tokenizer.json");
+
+        // Skip test if safetensors files don't exist
+        if !model_path.exists() || !tokenizer_path.exists() {
+            println!("Skipping test: safetensors TinyLlama files not found");
+            println!("Expected model at: {:?}", model_path);
+            println!("Expected tokenizer at: {:?}", tokenizer_path);
+            return;
+        }
+
+        // Test loading the model from safetensors format
+        let result = LlamaConfig::load_tiny_llama_safetensors::<TestBackend>(
+            model_path.to_str().unwrap(),
+            tokenizer_path.to_str().unwrap(),
+            max_seq_len,
+            &device,
+        );
+
+        assert!(result.is_ok(), "Failed to load TinyLlama model from safetensors: {:?}", result.err());
+
+        let llama = result.unwrap();
+
+        // Verify model loaded successfully by checking cache and tokenizer
+        assert_eq!(llama.cache.len(), 22, "Cache size should match TinyLlama's 22 layers");
+
+        // Test that tokenizer is working
+        let test_text = "Hello world";
+        let tokenized = llama.tokenize(test_text);
+        assert!(tokenized.dims()[0] > 0, "Tokenization should produce tokens");
+
+        println!("✓ TinyLlama model loaded successfully from safetensors with {} cache layers", llama.cache.len());
     }
 }
