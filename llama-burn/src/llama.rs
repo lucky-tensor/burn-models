@@ -348,6 +348,7 @@ impl LlamaConfig {
     }
 
     /// Load pre-trained TinyLlama-1.1B Chat v1.0 model with [SentenciePiece](https://github.com/google/sentencepiece) tokenizer.
+    // TODO: create a test for load_tiny_llama to ensure it works as expected
     #[cfg(feature = "tiny")]
     pub fn load_tiny_llama<B: Backend>(
         checkpoint: &str,
@@ -368,6 +369,18 @@ impl LlamaConfig {
 
         Ok(llama)
     }
+
+    // TODO: create an equivalent loader from .safetensor format
+    // Note: SafetensorsFileRecorder is not available in this version of Burn
+    // #[cfg(feature = "tiny")]
+    // pub fn load_tiny_llama_safetensors<B: Backend>(
+    //     checkpoint: &str,
+    //     tokenizer_path: &str,
+    //     max_seq_len: usize,
+    //     device: &Device<B>,
+    // ) -> Result<Llama<B, SentiencePieceTokenizer>, String> {
+    //     // Implementation would require SafetensorsFileRecorder
+    // }
 
     /// Load pre-trained TinyLlama-1.1B Chat v1.0 model with [SentenciePiece](https://github.com/google/sentencepiece) tokenizer.
     #[cfg(all(feature = "tiny", feature = "pretrained"))]
@@ -866,5 +879,54 @@ mod tests {
         ]]);
 
         output.into_data().assert_approx_eq(&expected, 3);
+    }
+
+    #[test]
+    #[cfg(all(feature = "tiny", feature = "pretrained"))]
+    fn test_load_tiny_llama() {
+
+        let device = Default::default();
+        let max_seq_len = 128;
+
+        // Construct paths to cached model files
+        let cache_dir = dirs::home_dir()
+            .expect("Should be able to get home directory")
+            .join(".cache")
+            .join("llama-burn")
+            .join("TinyLlama-1.1B");
+
+        let model_path = cache_dir.join("model.mpk");
+        let tokenizer_path = cache_dir.join("tokenizer.json");
+
+        // Skip test if cached files don't exist
+        if !model_path.exists() || !tokenizer_path.exists() {
+            println!("Skipping test: cached TinyLlama files not found");
+            println!("Expected model at: {:?}", model_path);
+            println!("Expected tokenizer at: {:?}", tokenizer_path);
+            return;
+        }
+
+        // Test loading the model
+        let result = LlamaConfig::load_tiny_llama::<TestBackend>(
+            model_path.to_str().unwrap(),
+            tokenizer_path.to_str().unwrap(),
+            max_seq_len,
+            &device,
+        );
+
+        assert!(result.is_ok(), "Failed to load TinyLlama model: {:?}", result.err());
+
+        let llama = result.unwrap();
+
+        // Verify model configuration matches expected TinyLlama specs
+        assert_eq!(llama.model.d_model, 2048, "Unexpected d_model dimension");
+        assert_eq!(llama.model.vocab_size, 32000, "Unexpected vocab size");
+        assert_eq!(llama.model.n_layers, 22, "Unexpected number of layers");
+        assert_eq!(llama.cache.len(), 22, "Cache size should match number of layers");
+
+        // Test that tokenizer is working
+        let test_text = "Hello world";
+        let tokenized = llama.tokenize(test_text);
+        assert!(tokenized.dims()[0] > 0, "Tokenization should produce tokens");
     }
 }

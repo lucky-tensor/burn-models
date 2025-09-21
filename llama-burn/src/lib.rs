@@ -8,9 +8,9 @@ mod transformer;
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "cuda")]
-    use burn::{backend::CudaJit, tensor::f16};
+    use burn::{backend::Cuda, tensor::f16};
     #[cfg(feature = "cuda")]
-    pub type TestBackend = CudaJit<f16, i32>;
+    pub type TestBackend = Cuda<f16, i32>;
 
     // NOTE: no tests on tch cpu (f32)
     #[cfg(feature = "tch-gpu")]
